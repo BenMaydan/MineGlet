@@ -20,6 +20,7 @@ TEXTURE_DIRECTORY = "textures/"
 GRASS_TOP = get_texture(TEXTURE_DIRECTORY + "GRASS_TOP.png")
 GRASS_SIDE = get_texture(TEXTURE_DIRECTORY + "GRASS_SIDE.png")
 DIRT = get_texture(TEXTURE_DIRECTORY + "DIRT.png")
+SAND = get_texture(TEXTURE_DIRECTORY + "SAND.png")
 BRICK = get_texture(TEXTURE_DIRECTORY + "BRICK.png")
 STONE = get_texture(TEXTURE_DIRECTORY + "STONE.png")
 AIR = get_texture(TEXTURE_DIRECTORY + "AIR.png")
@@ -37,10 +38,11 @@ class Textures:
     def __init__(self):
         self.GRASS = Texture(GRASS_TOP, GRASS_SIDE, DIRT)
         self.DIRT = Texture(DIRT, DIRT, DIRT)
+        self.SAND = Texture(SAND, SAND, SAND)
         self.BRICK = Texture(BRICK, BRICK, BRICK)
         self.STONE = Texture(STONE, STONE, STONE)
         self.AIR = Texture(AIR, AIR, AIR)
-        self.all = [self.GRASS, self.DIRT, self.STONE, self.AIR]
+        self.all = [self.GRASS, self.DIRT, self.SAND, self.STONE, self.AIR]
 
 
 textures = Textures()

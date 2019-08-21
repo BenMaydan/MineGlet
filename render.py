@@ -2,17 +2,57 @@ from pyglet.gl import *
 from pyglet.window import key
 from texture import textures
 from collections import deque
-import shapes
 import math
 import log
 import time
-import random
 
 xrange = range
 
 
 # CONSTANTS
-TICKS_PER_SECOND = 80
+TICKS_PER_SECOND = 10000
+GRAVITY = 20.0
+TERMINAL_VELOCITY = 50
+CHUNK = 16
+
+
+def normalize(vertex):
+    """
+    Accepts `position` of arbitrary precision and returns the block
+    containing that position.
+    :param vertex: The x, y, and z coordinates to normalize
+    """
+    x, y, z = vertex
+    x, y, z = (int(round(x)), int(round(y)), int(round(z)))
+    return (x, y, z)
+
+
+def cube_coordinates(vertex, n):
+    """
+    Returns the coordinates of the corners of a cube
+    :param vertex: The vertex of the bottom left back of the cube
+    :param n: To maintain the block size ratio
+    :return: the coordinates of the corners of a cube
+    """
+    x, y, z = vertex
+    return (
+        [
+            (x,y+1,z, x,y+1,z+1, x+1,y+1,z+1, x+1,y+1,z),  # top
+            (x,y,z, x,y,z+1, x+1,y,z+1, x+1,y,z),  # bottom
+            (x,y,z, x,y,z+1, x,y+1,z+1, x,y+1,z),  # left
+            (x+1,y,z, x+1,y,z+1, x+1,y+1,z+1, x+1,y+1,z),  # right
+            (x,y,z, x+1,y,z, x+1,y+1,z, x,y+1,z),  # front
+            (x,y,z+1, x+1,y,z+1, x+1,y+1,z+1, x,y+1,z+1),  # back
+        ],
+        [
+            (x, y+1, z), # Check block top
+            (x, y-1, z), # Check block bottom
+            (x-1, y, z), # Check block left
+            (x+1, y, z), # Check block right
+            (x, y, z-1), # Check block front
+            (x, y, z+1), # Check block back
+        ],
+    )
 
 
 class Model:
@@ -21,15 +61,15 @@ class Model:
         self.texture_coordinates = ('t2f', (0,0, 1,0, 1,1, 0,1))
 
         # Data about the world
-        self.world = {}
+        self.world = {(x, y, z):None for x in range(-100, 100) for y in range(-100, 100) for z in range(-100, 100)}
         self.shown = {}
+        self._shown = {}
 
         # Queue to process functions over time
         self.queue = deque()
 
-        self.add_blocks((0, 0, 0), (20, 20, 20), textures.DIRT)
-        self.add_blocks((15, 15, 15), (40, 40, 40), textures.STONE)
-        self.process_queue_fast()
+        self.add_blocks((1, 1, 1), (50, 50, 50), textures.DIRT)
+        self.add_block((-1, -1, -1), textures.DIRT, immediately=True)
 
     def exposed(self, vertex):
         """
@@ -68,22 +108,26 @@ class Model:
         if immediately:
             if self.exposed((x, y, z)):
                 self.shown[vertex] = texture
-                self.batch.add(4, GL_QUADS, texture.side, ('v3f', (x, y, z, X, y, z, X, Y, z, x, Y, z)),
-                               self.texture_coordinates)  # Front
-                self.batch.add(4, GL_QUADS, texture.side, ('v3f', (x, y, Z, X, y, Z, X, Y, Z, x, Y, Z)),
-                               self.texture_coordinates)  # Back
-                self.batch.add(4, GL_QUADS, texture.side, ('v3f', (x, y, z, x, y, Z, x, Y, Z, x, Y, z)),
-                               self.texture_coordinates)  # Left
-                self.batch.add(4, GL_QUADS, texture.side, ('v3f', (X, y, z, X, y, Z, X, Y, Z, X, Y, z)),
-                               self.texture_coordinates)  # Right
-                self.batch.add(4, GL_QUADS, texture.top, ('v3f', (x, Y, z, X, Y, z, X, Y, Z, x, Y, Z)),
-                               self.texture_coordinates)  # Top
-                self.batch.add(4, GL_QUADS, texture.bottom, ('v3f', (x, y, z, X, y, z, X, y, Z, x, y, Z)),
-                               self.texture_coordinates)  # Bottom
+                self._shown[vertex] = []
+
+                # Draws the QUADS based off of which faces are exposed
+                try:
+                    texture_loop = [texture.top, texture.bottom, texture.side, texture.side, texture.side, texture.side]
+                    texture_idx = 0
+                    for QUAD, CUBE_CHECK in zip(cube_coordinates(vertex, 1)[0], cube_coordinates(vertex, 1)[1]):
+                        if self.world[CUBE_CHECK] in (None, textures.AIR):
+                            self._shown[vertex].append(
+                                self.batch.add(4, GL_QUADS, texture_loop[texture_idx], ('v3f', QUAD), self.texture_coordinates)
+                            )
+                        texture_idx += 1
+                except KeyError:
+                    # If a key error occurs, that means that the block on that side of the original block
+                    # Does not exist, so just ignore the error
+                    pass
         else:
             self.queue.append(lambda: self.add_block(vertex, texture, immediately=True))
 
-    def add_blocks(self, bottom_left, top_right, texture):
+    def add_blocks(self, bottom_left, top_right, texture, immediately=False):
         """
         Fills an area with blocks. Maximum number of blocks possible is 150,000
         :param bottom_left: The bottom left most vertex of the blocks to add
@@ -93,29 +137,30 @@ class Model:
         """
         x, y, z = bottom_left
         X, Y, Z = top_right
-        assert ((X - x) * (Y - x) * (Z - z)) <= 150000, "Unable to fill more than 150,000 blocks. Number of blocks: {}"\
+        assert ((X - x) * (Y - x) * (Z - z)) <= 500000, "Unable to fill more than 500,000 blocks. Number of blocks: {}"\
             .format((X - x) * (Y - x) * (Z - z))
-
-        # How much to increment each coordinate by
 
         for x_coord in range(x, X, 1):
             for y_coord in range(y, Y, 1):
                 for z_coord in range(z, Z, 1):
-                    self.add_block((x_coord, y_coord, z_coord), texture, immediately=False)
+                    self.add_block((x_coord, y_coord, z_coord), texture, immediately=immediately)
 
-    def remove_block(self, vertex):
+    def remove_blocks(self, *vertices):
         """
         Removes the blocks from the given position and hides it so the player can't see it
         :param vertex: The x, y, and z coordinates of the block
         :return: None
         """
-        try:
-            self.world[vertex] = None
-            self.shown.pop(vertex)
-        except KeyError:
-            print("Cannot delete a block with vertex {} from the world dictionary".format(vertex))
-            log.ERROR("Cannot delete a block with vertex {} from the world dictionary".format(vertex))
-            quit()
+        for vertex in vertices:
+            try:
+                self.world[vertex] = None
+                self.shown.pop(vertex)
+                for vtx in self._shown[vertex]:
+                    vtx.delete()
+            except KeyError:
+                pass
+            except IndexError:
+                pass
 
     def process_queue_fast(self):
         """
@@ -139,15 +184,9 @@ class Model:
 
 
 class Player:
-    def __init__(self, pos=None, rot=None):
-        if pos is None:
-            self.pos = [0, 0, 0]
-        else:
-            self.pos = pos
-        if rot is None:
-            self.rot = [0, 0]
-        else:
-            self.rot = rot
+    def __init__(self, pos=(0, 0, 0), rot=(0, 0)):
+        self.pos = list(pos)
+        self.rot = list(rot)
 
     def mouse_motion(self, dx, dy):
         """
@@ -224,7 +263,7 @@ class World(pyglet.window.Window):
         :return: None
         """
         x, y, z = self.player.pos
-        x, y, z = round(x), round(y), round(z)
+        x, y, z = math.floor(x), math.floor(y), math.floor(z)
         self.label.text = 'FPS: {}, X: {}, Y: {}, Z: {}'.format(round(pyglet.clock.get_fps()), x, y, z)
         self.label.draw()
 
@@ -283,6 +322,7 @@ class World(pyglet.window.Window):
         self.push(self.player.pos, self.player.rot)
         self.model.draw()
         glPopMatrix()
+        self.model.process_queue_slowly()
 
         # Draws the crosshairs on the screen
         self.set2d()
@@ -313,9 +353,6 @@ def setup():
     """
     # Set the color of "clear", i.e. the sky, in rgba.
     glClearColor(0.5, 0.69, 1.0, 1)
-    # Enable culling (not rendering) of back-facing facets -- facets that aren't
-    # visible to you.
-    # glEnable(GL_CULL_FACE)
     # Set the texture minification/magnification function to GL_NEAREST (nearest
     # in Manhattan distance) to the specified texture coordinates. GL_NEAREST
     # "is generally faster than GL_LINEAR, but it can produce textured images
